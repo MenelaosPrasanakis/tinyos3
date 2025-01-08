@@ -2195,9 +2195,11 @@ TEST_SUITE(socket_tests,
 	"A suite of tests for sockets."
 	)
 {
+
 	&test_socket_constructor_many_per_port,
 	&test_socket_constructor_out_of_fids,
 	&test_socket_constructor_illegal_port,
+
 	
 	&test_listen_success,
 	&test_listen_fails_on_bad_fid,
@@ -2225,6 +2227,7 @@ TEST_SUITE(socket_tests,
 
 	&test_shudown_read,
 	&test_shudown_write,
+	
 
 	NULL
 };
@@ -2615,6 +2618,5 @@ int main(int argc, char** argv)
 	register_test(&user_tests);
 	return run_program(argc, argv, &all_tests);
 }
-
 
 

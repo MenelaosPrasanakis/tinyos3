@@ -101,6 +101,8 @@ typedef struct thread_control_block {
 
 	PCB* owner_pcb; /**< @brief This is null for a free TCB */
 
+	PTCB* ptcb;
+
 	cpu_context_t context; /**< @brief The thread context */
 	Thread_type type; /**< @brief The type of thread */
 	Thread_state state; /**< @brief The state of the thread */
@@ -108,16 +110,17 @@ typedef struct thread_control_block {
 
 	void (*thread_func)(); /**< @brief The initial function executed by this thread */
 
-	TimerDuration wakeup_time; /**< @brief The time this thread will be woken up by the scheduler */
 
+
+	TimerDuration wakeup_time; /**< @brief The time this thread will be woken up by the scheduler */
 	rlnode sched_node; /**< @brief Node to use when queueing in the scheduler queue */
 	TimerDuration its; /**< @brief Initial time-slice for this thread */
 	TimerDuration rts; /**< @brief Remaining time-slice for this thread */
 
 	enum SCHED_CAUSE curr_cause; /**< @brief The endcause for the current time-slice */
 	enum SCHED_CAUSE last_cause; /**< @brief The endcause for the last time-slice */
-
-#ifndef NVALGRIND
+  int priority; 
+	#ifndef NVALGRIND
 	unsigned valgrind_stack_id; /**< @brief Valgrind helper for stacks. 
 
 	  This is useful in order to register the thread stack to the valgrind memory profiler. 
@@ -129,6 +132,8 @@ typedef struct thread_control_block {
 #endif
 
 } TCB;
+
+void start_thread();
 
 /** @brief Thread stack size.
 
@@ -143,6 +148,7 @@ typedef struct thread_control_block {
  ************************/
 
 /** @brief Core control block.
+
 
   Per-core info in memory (basically scheduler-related). 
  */
@@ -254,6 +260,7 @@ void sleep_releasing(Thread_state newstate, Mutex* mx, enum SCHED_CAUSE cause, T
   it will renew the quantum for the current thread.
  */
 void yield(enum SCHED_CAUSE cause);
+#define  CALLS 1000
 
 /**
   @brief Enter the scheduler.
@@ -278,6 +285,7 @@ void initialize_scheduler(void);
   */
 #define QUANTUM (10000L)
 
+#define PRIORITY_QUEUES 10
 /** @} */
 
 #endif

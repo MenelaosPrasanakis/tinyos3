@@ -47,6 +47,49 @@ typedef struct file_control_block
 } FCB;
 
 
+/** @brief The pipe control block.
+  
+ 	 The pipe control block contains all the necessary
+   fields in order to read from the buffer and write
+   to the buffer 
+ */
+typedef struct pipe_control_block
+{
+	FCB *reader, *writer; /**@brief Our two file descriptors*/
+	CondVar has_space; /**@brief For blocking writer if no space is available*/
+	CondVar has_data; /**@brief For blocking reader until data are available*/
+	int w_position, r_position; /**@brief write, read position in buffer*/
+	char BUFFER[PIPE_BUFFER_SIZE]; /**@brief Bounded (cyclic) byte buffer*/
+	int counter; /**@brief A counter to count how many we have write on the buffer and how many we read so far*/
+}pipe_cb;
+
+/**@brief 
+ 
+ */
+int Sys_Pipe(pipe_t* pipe);
+
+/**@brief
+ 
+ */
+
+int pipe_write(void* pipecb_t, const char *buf, unsigned int n);
+
+/**@brief
+ 
+ */
+int pipe_read(void* pipecb_t, char *buf, unsigned int n);
+
+/**@brief
+ 
+ */
+int pipe_writer_close(void* _pipecb);
+
+/**@brief
+ 
+ */
+int pipe_reader_close(void* _pipecb);
+
+
 
 /** 
   @brief Initialization for files and streams.

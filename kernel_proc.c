@@ -5,7 +5,7 @@
 #include "kernel_streams.h"
 
 
-/* 
+/*
  The process table and related system calls:
  - Exec
  - Exit
@@ -41,8 +41,11 @@ static inline void initialize_PCB(PCB* pcb)
 
   rlnode_init(& pcb->children_list, NULL);
   rlnode_init(& pcb->exited_list, NULL);
+  rlnode_init(& pcb->ptcb_list, NULL);
   rlnode_init(& pcb->children_node, pcb);
   rlnode_init(& pcb->exited_node, pcb);
+ 
+  pcb->thread_count = 0;
   pcb->child_exit = COND_INIT;
 }
 
@@ -108,37 +111,71 @@ void release_PCB(PCB* pcb)
  *
  */
 
-/*
-	This function is provided as an argument to spawn,
-	to execute the main thread of a process.
+/**
+  @brief Entry point for the main thread of a process.
+ 
+  This function is used to initialize and execute the main task of a process.
+  It is invoked as part of the process creation, serving as the starting
+  point for the main thread. The function retrieves the main task,
+  arguments, and other details from the current process's control block
+  and ensures that the process exits cleanly after executing the task.
+
+  The function is passed to the thread creation routine (spawn) to
+  set up the execution context of the main thread.
 */
 void start_main_thread()
 {
-  int exitval;
+  int exitval; // Variable to store the exit value returned by the main task.
 
-  Task call =  CURPROC->main_task;
-  int argl = CURPROC->argl;
-  void* args = CURPROC->args;
+  Task call =  CURPROC->main_task; // Retrieve the main task function to be executed for the process.
 
-  exitval = call(argl,args);
-  Exit(exitval);
+  int argl = CURPROC->argl; // Retrieve the size/length of the arguments for the main task.
+  void* args = CURPROC->args; // Retrieve the pointer to the arguments for the main task.
+
+  exitval = call(argl,args); // Execute the main task with the provided arguments and store its return value.
+  Exit(exitval); //Terminate the process, passing the task's return value as the exit value.
 }
 
+ /**
+  @brief Entry point for a new thread created by sys_CreateThread.
+  This function is executed when a new thread is spawned. It retrieves
+  the task, arguments, and other details associated with the thread,
+  executes the task, and ensures the thread exits cleanly.
+
+  The function acts as a wrapper to invoke the user-provided task
+  function and manages the thread's lifecycle by handling the exit process.
+*/
+
+void start_thread()
+{
+  int exitval; // Variable to store the exit value returned by the task.
+
+  TCB* cur_thr = NULL;
+  cur_thr = cur_thread();
+  // Retrieve the current thread's TCB (Thread Control Block).
+
+  Task call = cur_thr->ptcb->task;// Extract the task function to be executed from the PTCB.
+  int argl = cur_thr->ptcb->argl;// Extract the size/length of arguments passed to the task.
+  void* args = cur_thr->ptcb->args;// Extract the pointer to the arguments passed to the task.
+
+  exitval = call(argl,args);// Execute the task with the provided arguments and store its return value.
+  sys_ThreadExit(exitval); // Terminate the thread, passing the task's return value as the exit value.
+}
 
 /*
-	System call to create a new process.
+  System call to create a new process.
  */
 Pid_t sys_Exec(Task call, int argl, void* args)
 {
   PCB *curproc, *newproc;
-  
+ 
   /* The new process PCB */
   newproc = acquire_PCB();
 
   if(newproc == NULL) goto finish;  /* We have run out of PIDs! */
 
   if(get_pid(newproc)<=1) {
-    /* Processes with pid<=1 (the scheduler and the init process) 
+    /* Processes with pid<=1 (the scheduler and the init process)
        are parentless and are treated specially. */
     newproc->parent = NULL;
   }
@@ -172,14 +209,23 @@ Pid_t sys_Exec(Task call, int argl, void* args)
   else
     newproc->args=NULL;
 
-  /* 
+  /*
     Create and wake up the thread for the main function. This must be the last thing
     we do, because once we wakeup the new thread it may run! so we need to have finished
     the initialization of the PCB.
    */
+
+  //here we also intialize the first  of the new pcb
   if(call != NULL) {
     newproc->main_thread = spawn_thread(newproc, start_main_thread);
+    aquire_PTCB(newproc->main_thread, call, argl, args);
+
+    newproc->thread_count++;
+
+   
+ 
     wakeup(newproc->main_thread);
+   
   }
 
 
@@ -233,9 +279,9 @@ static Pid_t wait_for_specific_child(Pid_t cpid, int* status)
   /* Ok, child is a legal child of mine. Wait for it to exit. */
   while(child->pstate == ALIVE)
     kernel_wait(& parent->child_exit, SCHED_USER);
-  
+ 
   cleanup_zombie(child, status);
-  
+ 
 finish:
   return cpid;
 }
@@ -285,82 +331,160 @@ Pid_t sys_WaitChild(Pid_t cpid, int* status)
 }
 
 
+/**
+  @brief Terminate the current process and perform necessary cleanup.
+ 
+  This function is called to terminate the current process. It updates the
+  process's exit value, performs cleanup for the process and its threads,
+  and ensures that any remaining child processes are handled appropriately.
+  If the current process is the initial process (PID 1), it waits for all
+  its child processes to exit before proceeding.
+
+  @param exitval The exit value of the process, which will be reported to its parent.
+*/
+
 void sys_Exit(int exitval)
 {
+  PCB* curproc = CURPROC; // Retrieve the current process control block (PCB).
 
-  PCB *curproc = CURPROC;  /* cache for efficiency */
+  curproc->exitval = exitval;// Set the exit value of the current process.
 
-  /* First, store the exit status */
-  curproc->exitval = exitval;
-
-  /* 
-    Here, we must check that we are not the init task. 
-    If we are, we must wait until all child processes exit. 
-   */
+  // Special handling for the initial process (PID 1).
+  // The initial process must wait for all child processes to terminate before it exits.
   if(get_pid(curproc)==1) {
-
     while(sys_WaitChild(NOPROC,NULL)!=NOPROC);
-
-  } else {
-
-    /* Reparent any children of the exiting process to the 
-       initial task */
-    PCB* initpcb = get_pcb(1);
-    while(!is_rlist_empty(& curproc->children_list)) {
-      rlnode* child = rlist_pop_front(& curproc->children_list);
-      child->pcb->parent = initpcb;
-      rlist_push_front(& initpcb->children_list, child);
-    }
-
-    /* Add exited children to the initial task's exited list 
-       and signal the initial task */
-    if(!is_rlist_empty(& curproc->exited_list)) {
-      rlist_append(& initpcb->exited_list, &curproc->exited_list);
-      kernel_broadcast(& initpcb->child_exit);
-    }
-
-    /* Put me into my parent's exited list */
-    rlist_push_front(& curproc->parent->exited_list, &curproc->exited_node);
-    kernel_broadcast(& curproc->parent->child_exit);
-
   }
 
-  assert(is_rlist_empty(& curproc->children_list));
-  assert(is_rlist_empty(& curproc->exited_list));
+ 
+  // Terminate the main thread of the current process.
+  // This call ensures thread-level cleanup and signals any waiting threads.
+  sys_ThreadExit(exitval);
 
-
-  /* 
-    Do all the other cleanup we want here, close files etc. 
-   */
-
-  /* Release the args data */
-  if(curproc->args) {
-    free(curproc->args);
-    curproc->args = NULL;
-  }
-
-  /* Clean up FIDT */
-  for(int i=0;i<MAX_FILEID;i++) {
-    if(curproc->FIDT[i] != NULL) {
-      FCB_decref(curproc->FIDT[i]);
-      curproc->FIDT[i] = NULL;
-    }
-  }
-
-  /* Disconnect my main_thread */
-  curproc->main_thread = NULL;
-
-  /* Now, mark the process as exited. */
-  curproc->pstate = ZOMBIE;
-
-  /* Bye-bye cruel world */
-  kernel_sleep(EXITED, SCHED_USER);
+ 
 }
+
+
+
+/* This structure defines the file operations (file_ops) for procinfo file-related operations,
+including functions for opening, reading, writing, and closing procinfo files.*/
+static file_ops procinfo_file_ops = {
+  .Open = NULL,     // No specific open operation for procinfo files.
+  .Read = procinfo_read,  // Function pointer to the procinfo read operation.
+  .Write = NULL,    // No specific write operation for procinfo files.
+  .Close = procinfo_close // Function pointer to the procinfo close operation.
+};
 
 
 
 Fid_t sys_OpenInfo()
 {
-	return NOFILE;
+  Fid_t fid ;
+  FCB* fcb ;
+//reserve 1 fid fcb 
+  int reserve=FCB_reserve(1,&fid,&fcb);
+
+
+//check reservation succesfull or not
+  if(reserve==0){
+    return -1;
+  }
+
+//creates the socket (the space for the socket)
+  procinfo_CB* info_proc=(procinfo_CB*)xmalloc(sizeof(procinfo_CB));
+
+// Check if memory allocation for procinfo control block was successful
+  if(info_proc==NULL){
+    return NOFILE;
+  }
+
+
+  info_proc->PCB_cursor=0;  //initialization for the cursor in the portmap
+  fcb->streamobj=info_proc; // Set the stream object and stream functions in the FCB
+  fcb->streamfunc=&procinfo_file_ops;
+
+//return the reserved fid
+return fid;
+
 }
 
+
+/* This function reads the process information from the procinfo control block,
+   updates the cursor to the next process entry, and copies the process information
+   to the provided buffer. */
+int procinfo_read(void* procinfocb, char* buf, unsigned int size)
+{
+  procinfo_CB* info = (procinfo_CB*) procinfocb;
+
+    // Check if the procinfo control block is valid.
+  if(info==NULL){
+    return -1;
+  }
+
+  // Find the next non-FREE process entry in the process table.
+  while(info->PCB_cursor < MAX_PROC && PT[info->PCB_cursor].pstate == FREE) {
+    info->PCB_cursor++;
+  }
+
+  // Check if there are no more process entries.
+  if(info->PCB_cursor == MAX_PROC) {
+    return 0;
+  }
+
+  procinfo* proc_info = info-> curinfo;
+
+  // Allocate memory for the procinfo structure.
+  proc_info = xmalloc(sizeof(procinfo));
+
+
+
+  // Get information from the process table and populate the procinfo structure.
+  PCB proc = PT[info->PCB_cursor];
+
+  proc_info->pid = get_pid(&PT[info->PCB_cursor]);
+  proc_info->ppid = get_pid(proc.parent);
+
+
+  // Determine the process state (alive or zombie).
+  if(proc.pstate == ZOMBIE){
+    proc_info->alive = 0;
+  }
+  else{
+    proc_info->alive = 1;
+  }
+  proc_info->thread_count = proc.thread_count;
+  proc_info->main_task = proc.main_task;
+  proc_info->argl = proc.argl;
+
+      // Copy process arguments to the procinfo structure.
+  if(proc.argl < PROCINFO_MAX_ARGS_SIZE ) {
+    memcpy(proc_info->args, proc.args, proc.argl);
+  }
+  else {
+    memcpy(proc_info->args, proc.args, PROCINFO_MAX_ARGS_SIZE);
+  }
+
+  // Copy procinfo data to the provided buffer.
+  memcpy(buf, proc_info, size);
+   
+  // Free the allocated memory for the procinfo structure.
+  free(proc_info);
+
+  // Move the cursor to the next process entry in the process table.
+  info->PCB_cursor++;
+
+  // Return the number of bytes read.
+  return size;
+}
+
+/*This function checks if the provided procinfo control block pointer is valid,
+and if so, frees the memory associated with it.*/
+int procinfo_close(void* this){
+  procinfo_CB* proc=(procinfo*) this;
+  // Free the memory associated with the procinfo_cb structure
+  if(proc!=NULL){
+    //proc=NULL;
+    free(proc);
+    return 0;
+  }
+  return -1;
+}

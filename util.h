@@ -289,6 +289,11 @@ typedef struct thread_control_block TCB;	/**< @brief Forward declaration */
 typedef struct core_control_block CCB;		/**< @brief Forward declaration */
 typedef struct device_control_block DCB;	/**< @brief Forward declaration */
 typedef struct file_control_block FCB;		/**< @brief Forward declaration */
+typedef struct process_thread_control_block PTCB; /**< @brief Forward declaration */
+typedef struct socket_control_block socket_cb; /**< @brief Forward declaration */
+typedef struct connection_request connection_request ; /**< @brief Forward declaration */
+/**The new struct PTCB is used in 
+ * order to make the tinyos3 multi-threaded*/
 
 /** @brief A convenience typedef */
 typedef struct resource_list_node * rlnode_ptr;
@@ -314,7 +319,10 @@ typedef struct resource_list_node {
     CCB* ccb;
     DCB* dcb;
     FCB* fcb;
+    PTCB* ptcb; 
     void* obj;
+    socket_cb* socket_cb;
+    connection_request* connection_request;
     rlnode_ptr node;
     intptr_t num;
     uintptr_t unum;

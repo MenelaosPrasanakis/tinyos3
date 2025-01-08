@@ -52,6 +52,8 @@ typedef int Fid_t;
 /** @brief The invalid file id. */
 #define NOFILE  (-1)
 
+/**@brief The size of our buffer.*/
+#define PIPE_BUFFER_SIZE 4096
 
 /**
   @brief The type of a thread ID.
